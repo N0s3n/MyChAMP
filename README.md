@@ -1,6 +1,8 @@
 # MyChAMP Code
 
-This is the first project I finished in UK, which contains all code about ChAMP pacakges. I think it's not that perfect, but I am really to busy to upgrade it...
+This is beta version of ChAMP, which has not been released officially yet.
+
+Current version of ChAMP is 2.6.3, I made is support Paired Analysis already.
 
 Best
 Yuan Tian
