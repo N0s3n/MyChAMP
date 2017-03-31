@@ -1,92 +1,69 @@
-if(getRversion() >= "3.1.0") utils::globalVariables(c("sampleNames<-","snp.hit","multi.hit","probe.features"))
+if(getRversion() >= "3.1.0") utils::globalVariables(c("sampleNames<-","EPIC.manifest.hg38","EPIC.manifest.pop.hg38","hm450.manifest.hg38","hm450.manifest.pop.hg38","multi.hit","probe.features","probe.features.epic"))
 
 champ.load <- function(directory = getwd(),
                        methValue="B",
-                       resultsDir=paste(getwd(), "resultsChamp",sep="/"),
-                       filterXY=TRUE,
-                       QCimages=TRUE,
                        filterDetP=TRUE,
+                       detSamplecut=0.1,
                        detPcut=0.01,
-                       removeDetP = 0,
+                       removeDetP=0,
                        filterBeads=TRUE,
                        beadCutoff=0.05,
-                       filterNoCG=FALSE,
+                       filterNoCG=TRUE,
                        filterSNPs=TRUE,
+                       population=NULL,
                        filterMultiHit=TRUE,
+                       filterXY=TRUE,
                        arraytype="450K")
 {
-	read.450k.sheet<-NA
-	rm(read.450k.sheet)
-	read.450k.exp<-NA
-	rm(read.450k.exp)
-	pData<-NA
-	rm(pData)
-	getGreen<-NA
-	rm(getGreen)
-	getRed<-NA
-	rm(getRed)
-	preprocessRaw<-NA
-	rm(preprocessRaw)	
-	getMeth<-NA
-	rm(getMeth)
-	getUnmeth<-NA
-	rm(getUnmeth)		
-	getBeta<-NA
-	rm(getBeta)
-	getM<-NA
-	rm(getM)
-	plotBetasByType<-NA
-	rm(plotBetasByType)
-	mdsPlot<-NA
-	rm(mdsPlot)
-    detectionP<-NA
-    rm(detectionP)
-
-	
+    message("[===========================]")
+    message("[<<<< ChAMP.LOAD START >>>>>]")
+    message("-----------------------------")
 	message("Loading data from ", directory)
-
-	if(!file.exists(resultsDir))
-	{
-		dir.create(resultsDir)
-		message("Creating results directory. Results will be saved in ", resultsDir)
-	}			
 	
-    myDir= directory
+    myDir <- directory
     suppressWarnings(targets <- read.metharray.sheet(myDir))
-	rgSet <- read.metharray.exp(targets = targets, extended=TRUE)
-    if(arraytype=="EPIC")
-        rgSet@annotation <- c(array="IlluminaHumanMethylationEPIC",annotation="ilmn10.hg19")
+    rgSet <- read.metharray.exp(targets = targets,extended=TRUE)
+    if(arraytype=="EPIC") rgSet@annotation <- c(array="IlluminaHumanMethylationEPIC",annotation="ilmn10.hg19")
+
 	sampleNames(rgSet)=rgSet[[1]]
-	pd<-pData(rgSet)
-	green=getGreen(rgSet)
-	red=getRed(rgSet)
+	pd <- pData(rgSet)
 	mset <- preprocessRaw(rgSet)
     detP <- detectionP(rgSet)
 	
-    message("Read DataSet Success.\n")
+    message("<< Read DataSet Success. >>\n")
 
-    failed <- detP>detPcut
-    numfail = colMeans(failed) # Fraction of failed positions per sample
-    message("The fraction of failed positions per sample: ")
+    message("The fraction of failed positions per sample\n 
+            (You may need to delete samples with high proportion of failed probes\n): ")
+    numfail <- matrix(colMeans(detP>detPcut))
+    rownames(numfail) <- colnames(detP)
+    colnames(numfail) <- "Failed CpG Fraction."
     print(numfail)
-    fileName=paste(resultsDir,"/failedSample",".txt",sep="")
-    write.table(numfail, fileName, row.names=T, col.names=paste("Sample_Name","Fraction_Failed_Probes",sep="\t"), quote=F,sep="\t")
+    RemainSample <- which(numfail < detSamplecut)
+
+    if(any(numfail >= detSamplecut))
+    message("The detSamplecut parameter is : ",detSamplecut, "\nSamples : ",
+            paste(rownames(numfail)[which(numfail >= detSamplecut)],collapse=",")," will be deleted.\n",
+            "There are ",length(RemainSample)," samples left for analysis.\n")
     
+    rgSet <- rgSet[,RemainSample]
+    detP <- detP[,RemainSample]
+    mset <- mset[,RemainSample]
+    pd <- pd[RemainSample,]
+
     if(filterDetP)
     {
         mset.f = mset[rowSums(detP >= detPcut) <= removeDetP*ncol(detP),]
         
         if(removeDetP==0)
         {
-            message("Filtering probes with a detection p-value above ",detPcut," in one or more samples has removed ",dim(mset)[1]-dim(mset.f)[1]," probes from the analysis. If a large number of probes have been removed, ChAMP suggests you look at the failedSample.txt file to identify potentially bad samples.")
+            message("Filtering probes with a detection p-value above ",detPcut," in one or more samples has removed ",dim(mset)[1]-dim(mset.f)[1]," probes from the analysis. If a large number of probes have been removed, ChAMP suggests you to identify potentially bad samples.")
         }else{
             message("Filtering probes with a detection p-value above ",detPcut," in at least ",removeDetP*100,"% of samples has removed ",dim(mset)[1]-dim(mset.f)[1]," probes from the analysis. If a large number of probes have been removed, ChAMP suggests you look at the failedSample.txt file to identify potentially bad samples.")
         }
-
         mset=mset.f
     }
     
-    message("Filter DetP Done.\n")
+    message("<< Filter DetP Done. >>\n")
 
     if(filterBeads)
     {
@@ -96,27 +73,66 @@ champ.load <- function(directory = getwd(),
         message("Filtering probes with a beadcount <3 in at least ",beadCutoff*100,"% of samples, has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
         mset=mset.f2
     }
+    message("<< Filter Beads Done. >>\n")
 
-    message("Filter Beads Done.\n")
-    
     if(filterNoCG)
     {
-        mset.f2=mset
-        dropMethylationLoci(mset,dropCH=T)
-        message("Filtering non-cg probes, has removed ",dim(mset.f2)[1]-dim(mset)[1]," from the analysis.")
+        mset.f2=dropMethylationLoci(mset,dropCH=T)
+        message("Filtering non-cg probes, has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
+        mset <- mset.f2
     }
-    
-    message("Filter NoCG Done.\n")
+    message("<< Filter NoCG Done. >>\n")
 
     if(filterSNPs)
     {
-        data(snp.hit)
-        mset.f2=mset[!featureNames(mset) %in% snp.hit$TargetID,]
-        message("Filtering probes with SNPs as identified in Nordlund et al, has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
+        if(arraytype=="450K")
+        {
+            if(is.null(population))
+            {
+                message("Using general 450K SNP list for filtering.")
+                data(hm450.manifest.hg38)
+                maskname <- rownames(hm450.manifest.hg38)[which(hm450.manifest.hg38$MASK.general==TRUE)]
+            }else if(!population %in% c("AFR","EAS","EUR","SAS","AMR","GWD","YRI","TSI",
+                                        "IBS","CHS","PUR","JPT","GIH","CHB","STU","ITU",
+                                        "LWK","KHV","FIN","ESN","CEU","PJL","ACB","CLM",
+                                        "CDX","GBR","BEB","PEL","MSL","MXL","ASW"))
+            {
+                message("Using general 450K SNP list for filtering.")
+                data(hm450.manifest.hg38)
+                maskname <- rownames(hm450.manifest.hg38)[which(hm450.manifest.hg38$MASK.general==TRUE)]
+            }else
+            {
+                message("Using ",population," specific 450K SNP list for filtering.")
+                data(hm450.manifest.pop.hg38)
+                maskname <- rownames(hm450.manifest.pop.hg38)[which(hm450.manifest.pop.hg38[,paste("MASK.general",population,sep=".")]==TRUE)]
+            }
+        }else
+        {
+            if(is.null(population))
+            {
+                message("Using general EPIC SNP list for filtering.")
+                data(EPIC.manifest.hg38)
+                maskname <- rownames(EPIC.manifest.hg38)[which(EPIC.manifest.hg38$MASK.general==TRUE)]
+            }else if(!population %in% c("AFR","EAS","EUR","SAS","AMR","GWD","YRI","TSI",
+                                        "IBS","CHS","PUR","JPT","GIH","CHB","STU","ITU",
+                                        "LWK","KHV","FIN","ESN","CEU","PJL","ACB","CLM",
+                                        "CDX","GBR","BEB","PEL","MSL","MXL","ASW"))
+            {
+                message("Using general EPIC SNP list for filtering.")
+                data(EPIC.manifest.hg38)
+                maskname <- rownames(EPIC.manifest.hg38)[which(EPIC.manifest.hg38$MASK.general==TRUE)]
+            }else
+            {
+                message("Using ",population," specific EPIC SNP list for filtering.")
+                data(EPIC.manifest.pop.hg38)
+                maskname <- rownames(EPIC.manifest.pop.hg38)[which(EPIC.manifest.pop.hg38[,paste("MASK.general",population,sep=".")]==TRUE)]
+            }
+        }
+        mset.f2=mset[!featureNames(mset) %in% maskname,]
+        message("Filtering probes with SNPs as identified in Zhou's Nucleic Acids Research Paper, 2016, has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
         mset=mset.f2
     }
-
-    message("Filter SNP Done.\n")
+    message("<< Filter SNP Done. >>\n")
     
     if(filterMultiHit)
     {
@@ -125,80 +141,31 @@ champ.load <- function(directory = getwd(),
         message("Filtering probes that align to multiple locations as identified in Nordlund et al, has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
         mset=mset.f2
     }
-    
-    message("Filter MultiHit Done.\n")
+    message("<< Filter MultiHit Done. >>\n")
 
-    intensity=getMeth(mset)+getUnmeth(mset)
-    
-    if(methValue=="B")
-    {
-        beta.raw = getBeta(mset, "Illumina")
-    }else{
-        beta.raw = getM(mset)
-        }
-        
-    head(beta.raw)    
-    
-    detP=detP[which(row.names(detP) %in% row.names(beta.raw)),]
-    
     if(filterXY)
 	{
-        if(arraytype=="EPIC")
-        {
-            data(probe.features.epic)
-        }else{
-		data(probe.features)
-        }
+        if(arraytype=="EPIC") data(probe.features.epic) else data(probe.features)
 		autosomes=probe.features[!probe.features$CHR %in% c("X","Y"), ]
         mset.f2=mset[featureNames(mset) %in% row.names(autosomes),]
-		beta.raw=beta.raw[row.names(beta.raw) %in% row.names(autosomes), ]
-        detP=detP[row.names(detP) %in% row.names(autosomes), ]
-        intensity=intensity[row.names(intensity) %in% row.names(autosomes), ]
         message("Filtering probes on the X or Y chromosome has removed ",dim(mset)[1]-dim(mset.f2)[1]," from the analysis.")
         mset=mset.f2
 	}
+    message("<< Filter XY chromosome Done. >>\n")
 
-    message("Filter XY chromosome Done.\n")
     
-    totalProbes=dim(beta.raw)[1]
+    if(methValue=="B")beta.raw = getBeta(mset, "Illumina") else beta.raw = getM(mset)
+    message(paste(if(methValue=="B") "[Beta" else "[M","value is selected as output.]\n"))
 
-	#cluster
-	if(QCimages)
-	{
-		if(ncol(beta.raw) > 0)
-		{
-            if(min(beta.raw, na.rm=TRUE)==0)
-            {
-                message("Zeros in your dataset have been replaced with 0.000001")
-                beta.raw[beta.raw==0]<-0.000001
-            }
-            
-		#save images...
-        imageName1=paste(resultsDir,"raw_mdsPlot.pdf",sep="/")
-        imageName2=paste(resultsDir,"raw_densityPlot.pdf",sep="/")
-        imageName3=paste(resultsDir,"raw_SampleCluster.jpg",sep="/")
-        main1=paste("Density plot of raw data (",totalProbes," probes)",sep="")
-        main2=paste("All samples before normalization (",totalProbes, " probes)",sep="")
-            
-		pdf(imageName1,width=6,height=4)
-		mdsPlot(beta.raw,numPositions=1000,sampGroups=pd$Sample_Group,sampNames=pd$Sample_Name)
-		dev.off()
-				
-		pdf(imageName2,width=6,height=4)
-		densityPlot(rgSet,sampGroups=pd$Sample_Group,main=main1,xlab="Beta")
-		dev.off()
-		
-		if(ncol(beta.raw) < 60)
-		{	
-			jpeg(imageName3)
-			betar_d<-dist(t(beta.raw))
-			plot(hclust(betar_d),main=main2,cex=0.8)
-			dev.off()
-		}else{
-			message("Cluster image is not saved when the number of samples exceeds 60.")
-			}
-		}
-	}
-    message("The analysis will proceed with ", dim(beta.raw)[1], " probes and ",dim(beta.raw)[2], " samples.")
-	return(list(mset=mset,rgSet=rgSet,pd=pd,intensity=intensity,beta=beta.raw,detP=detP));
+    intensity <-  minfi::getMeth(mset) + minfi::getUnmeth(mset)
+    detP <- detP[which(row.names(detP) %in% row.names(beta.raw)),]
+
+    if(min(beta.raw, na.rm=TRUE)==0) beta.raw[beta.raw==0] <- 0.000001
+    message("Zeros in your dataset have been replaced with 0.000001\n")
+
+    message("The analysis will be proceed with ", dim(beta.raw)[1], " probes and ",dim(beta.raw)[2], " samples.\n")
+    message("[<<<<< ChAMP.LOAD END >>>>>>]")
+    message("[===========================]")
+    message("[You may want to process champ.QC() next.]\n")
+	return(list(mset=mset,rgSet=rgSet,pd=pd,intensity=intensity,beta=beta.raw,detP=detP))
 }
